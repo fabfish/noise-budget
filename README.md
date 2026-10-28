@@ -16,6 +16,23 @@ training set, and the cross-entropy on Dust's validation set. What changes is th
 only run the model forward; track 3 also frees the architecture. Until October 22, 2026, the training set was
 Dust's 10M tokens; those tracks and records are archived in [`archive/10M/`](archive/10M/README.md).
 
+## Budget entry
+
+This fork targets **Track 2**, minimizing measured training time to a final validation loss of at most 3.5
+on one 8xH100 node. Its scope is forward-only credit assignment, estimator/optimizer co-design and explicit
+compute accounting under the fixed model, data and epoch constraints.
+
+The baseline remains the upstream record. Experimental results are reported only after the unmodified
+official evaluator verifies the final weights; no unmeasured speedup is claimed.
+
+The first experiment measures the low-cost identity phase over the full 30M-token epoch, without a Cut phase.
+This is a diagnostic, not a record claim; the default training command and baseline recipe are unchanged.
+
+```bash
+uv run torchrun --standalone --nproc_per_node=8 train/speedrun/run.py \
+  --identity-only --identity-updates 1831 --output logs/identity-probe
+```
+
 ## Tracks
 
 The 10M-token tracks are archived in [`archive/10M/`](archive/10M/README.md) and no longer accept submissions.

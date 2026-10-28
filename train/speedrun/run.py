@@ -3863,6 +3863,39 @@ def train_stages(args, settings, device, rank, world):
     if args.identity_updates and not args.resume:  # the identity-path phase, built and captured before the timer
         identity = IdentityPhase(training.numpy(), args.identity_schedule or args.identity_updates, device, rank, world,
                                  seed=SEED)
+    if args.identity_only:
+        if identity is None:
+            raise ValueError('--identity-only requires a positive --identity-updates')
+        if rank == 0:
+            if args.output.exists() and any(args.output.iterdir()):
+                raise FileExistsError(f'Choose an empty output directory: {args.output}')
+            args.output.mkdir(parents=True, exist_ok=True)
+            (args.output / 'config.json').write_text(json.dumps(dict(
+                script=__file__, world=world, seed=SEED, mode='identity-probe',
+                steps=args.identity_updates, train_rows=args.identity_updates * BATCH,
+                upstream='qlabs-eng/noise@48e9ea73a7d74c6811a52eaa3deb4c2d76977367',
+                torch_version=torch.__version__, identity=identity.config(),
+            ), indent=2)+'\n')
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        identity.run(args.identity_updates)
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter()-start
+        identity_loss = average_ranks(identity.model.losses[args.identity_updates-1:args.identity_updates].clone()).item()
+        state = identity.model.state_dict()
+        result = dict(val_loss=evaluate(state, args.data_dir),
+                      train_seconds=round(elapsed, 2), steps=args.identity_updates,
+                      seqs=args.identity_updates * BATCH, tokens=args.identity_updates * BATCH * SEQ,
+                      estimator='identity', peak_cuda_gb=round(torch.cuda.max_memory_allocated()/1e9, 3))
+        if rank == 0:
+            torch.save(state, args.output/'final.pt')
+            record = dict(step=args.identity_updates, phase='identity', phase_step=args.identity_updates,
+                          seqs=result['seqs'], tokens=result['tokens'], train_loss=identity_loss,
+                          train_seconds=result['train_seconds'], peak_cuda_gb=result['peak_cuda_gb'])
+            (args.output/'metrics.jsonl').write_text(json.dumps(record)+'\n')
+            (args.output/'result.json').write_text(json.dumps(result, indent=2)+'\n')
+            print(json.dumps(result), flush=True)
+        return
     if args.identity_updates:  # its rows feed no Cut update: one epoch over both phases
         import numpy as np
         used = np.random.default_rng((SEED + 1, 0)).permutation(len(training))[:args.identity_updates * 8]
@@ -4061,12 +4094,17 @@ def main():
                              'rows. 0: Cut (and Boost) over the whole epoch.')
     parser.add_argument('--identity-schedule', type=int, default=IDENTITY_SCHEDULE,
                         help='Plan the identity phase for this many updates and hand off after --identity-updates.')
+    parser.add_argument('--identity-only', action='store_true',
+                        help='Diagnostic: evaluate the identity phase without running Cut.')
     args = parser.parse_args()
     for key in ('steps', 'stop_after_step'):
         if getattr(args, key) is not None and getattr(args, key) < 1:
             parser.error(key + ' must be positive')
-    if min(args.checkpoint_every, args.eval_every) < 0:
-        parser.error('Logging intervals must be nonnegative')
+    if min(args.checkpoint_every, args.eval_every, args.identity_updates) < 0:
+        parser.error('Logging intervals and identity updates must be nonnegative')
+    schedule = args.identity_schedule or args.identity_updates
+    if schedule < 1 or args.identity_updates > schedule or args.identity_updates * BATCH > TRAIN_ROWS:
+        parser.error('Identity updates must fit a positive schedule and the one-epoch training set')
     settings = Settings(chain_tokens=args.chain_tokens, key_chunk=args.key_chunk,
                         key_path_tokens=args.key_path_tokens, future_tokens=args.future_tokens,
                         future_chunk=args.future_chunk)
