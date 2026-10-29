@@ -4127,6 +4127,8 @@ def main():
                         key_path_tokens=args.key_path_tokens, future_tokens=args.future_tokens,
                         future_chunk=args.future_chunk)
     rank, world = int(os.environ.get('RANK', 0)), int(os.environ.get('WORLD_SIZE', 1))
+    if world == 1:
+        settings.moment_kernel = False
     torch.cuda.set_device(int(os.environ.get('LOCAL_RANK', 0)))
     device = torch.device('cuda', torch.cuda.current_device())
     torch.set_num_threads(1)
