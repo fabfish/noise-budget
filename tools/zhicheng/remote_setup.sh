@@ -10,7 +10,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 if [ ! -d noise-budget/.git ]; then
   git clone --branch budget-speedrun --single-branch https://github.com/fabfish/noise-budget.git
-else
+elif [ "${NOISE_UPDATE:-0}" = 1 ]; then
   git -C noise-budget fetch origin budget-speedrun
   git -C noise-budget checkout budget-speedrun
   git -C noise-budget pull --ff-only origin budget-speedrun

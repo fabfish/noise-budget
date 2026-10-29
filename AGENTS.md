@@ -133,7 +133,7 @@ uv run utils/prepare_data.py
 uv run utils/prepare_data.py --verify
 ```
 
-依赖版本以 `pyproject.toml` 和 `uv.lock` 为准。下载源变慢时，可以只在远端临时替换镜像地址，但不得改变版本或 wheel 哈希。原始 `uv.lock` 与 `pyproject.toml` 要保留备份，镜像改动不得进入公开提交。
+依赖版本以 `pyproject.toml` 和 `uv.lock` 为准。下载源变慢时，可以只在远端临时替换镜像地址，但不得改变版本或 wheel 哈希。原始 `uv.lock` 与 `pyproject.toml` 要保留备份，镜像改动不得进入公开提交。`remote_setup.sh` 默认复用已有克隆以避免重复网络请求；只有明确需要更新代码时才执行 `NOISE_UPDATE=1 bash tools/zhicheng/remote_setup.sh`。
 
 固定数据的 token SHA256 必须为：
 
