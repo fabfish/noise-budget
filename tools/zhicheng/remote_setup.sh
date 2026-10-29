@@ -19,7 +19,7 @@ cd noise-budget
 if [ -f "$TOOLS/use_mirror.py" ]; then
   python3 "$TOOLS/use_mirror.py"
 fi
-uv sync
+uv sync --locked
 uv run python -c "import torch; print({'torch': torch.__version__, 'cuda': torch.cuda.is_available(), 'gpus': torch.cuda.device_count()})"
 if [ -f data/train.pt ] && [ -f data/val.pt ]; then
   uv run utils/prepare_data.py --verify
