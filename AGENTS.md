@@ -177,6 +177,7 @@ uv run torchrun --standalone --nproc_per_node=8 train/speedrun/run.py \
 - **实例配置发布后仍是旧命令**：检查所有 ACE 编辑器，重新发布并刷新验证。
 - **应用停止后没有 DNAT**：按本文件恢复两条规则，再验证 SSH。
 - **下载很慢**：只换镜像，不换依赖版本或哈希。
+- **MIG 上 Cut 报非法显存访问**：同步日志若指向 `moment_matrix_kernel`，单卡诊断使用 `settings.moment_kernel=False` 的作者回退实现；不要共享多个 NCCL rank 到同一 MIG，也不要把 MIG 时间当成 8×H100 成绩。
 - **其他任务状态异常**：先读启动命令和事件，不要停止。已确认的 `awsec-test-39466` 只是输出标记文件的探针，不是 Noise 训练。
 
 ## 9. 推送前检查
