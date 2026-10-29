@@ -22,6 +22,11 @@
 - `tools/zhicheng/dnat_add.js`：通过控制台表单添加规则；先 `dry` 后 `save`。
 - `tools/zhicheng/dnat_rebind.js`：已有规则解绑、精确重绑并校验目标 UID。
 - `tools/zhicheng/noise_sshd.sh`：安装并启动 sshd，配置授权公钥；不包含私钥。
+- `tools/zhicheng/remote_setup.sh`：克隆公开代码、安装依赖并生成/验证固定数据。
+- `tools/zhicheng/remote_pipeline.sh`：等待数据验证后启动功能实验。
+- `tools/zhicheng/remote_identity_probe.sh`：在当前 2 张物理卡上运行 8 个逻辑 rank，并明确标记非纪录。
+- `tools/zhicheng/use_mirror.py`：仅替换下载源，保留依赖版本与哈希及原始配置备份。
+- `tools/zhicheng/noise_cci_pipeline_init.sh`：实例自举入口，先启动 sshd，再执行安装和实验。
 - `.tools/`：本地临时脚本、浏览器依赖和截图，已忽略，不得推送。
 - `.kimi-code/`：工具产生的本地截图和状态，已忽略。
 - `data/`、`logs/`：固定数据与运行输出，已忽略。正式提交所需日志按上游要求显式加入对应 `train/*/log/`。
@@ -141,14 +146,23 @@ GitHub Release `public-data-v1` 只是公开输入数据的传输备份，不是
 
 ## 7. 实验与结果
 
-2×H100 功能实验使用 8 个逻辑 rank，并保存 `physical_gpus=2`、`record_eligible=false` 元数据。只有数据验证通过才启动训练。
+当前 2×H100 功能实验使用 8 个逻辑 rank，并保存 `physical_gpus=2`、`record_eligible=false` 元数据。只有数据验证通过才启动训练。在 `/root/work` 布局的 CCI 实例中执行：
+
+```bash
+bash tools/zhicheng/remote_setup.sh
+bash tools/zhicheng/remote_pipeline.sh
+```
+
+`remote_pipeline.sh` 调用 `remote_identity_probe.sh`，把 8 个 rank 分配到 2 张物理卡。不要直接在 2 卡机器上用 `torchrun --nproc_per_node=8` 代替该包装器。
+
+在真实的 8 卡正式环境中，诊断命令为：
 
 ```bash
 uv run torchrun --standalone --nproc_per_node=8 train/speedrun/run.py \
   --identity-only --identity-updates 1831 --output logs/identity-probe
 ```
 
-该命令是诊断，不是纪录。最终权重必须由未修改的 `utils/eval.py` 严格加载并重新评分。墙钟、硬件、逻辑 rank、物理卡数、seed 和数据使用量必须一起记录。
+这些命令都是诊断，不是纪录。最终权重必须由未修改的 `utils/eval.py` 严格加载并重新评分。墙钟、硬件、逻辑 rank、物理卡数、seed 和数据使用量必须一起记录。
 
 正式 PR 只允许在真实单节点 8×H100 上取得合规结果后提交，并附官方要求的 `config.json`、`metrics.jsonl` 和 `result.json`。不得把 2 卡共享运行、推算时间或未验证 checkpoint 包装成比赛成绩。
 
