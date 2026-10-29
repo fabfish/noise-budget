@@ -7,12 +7,12 @@
 - GitHub：`fabfish/noise-budget`；工作分支：`budget-speedrun`。
 - 上游：`qlabs-eng/noise`。提交前重新读取上游 leaderboard；只有真实成绩超过当时纪录才发 PR。
 - 官方 Track 2 的正式环境是**单节点 8×H100**。其他硬件只用于功能验证，不能据此声称破纪录。
-- 当前 CCI 应用：`Noise-Budget` / `noise-budget`。
-- 应用 UID：`d23f37025c03458c96c481c6f268b71d`。
-- 集群：`computing_cluster_01g_02` / `computing-cluster-01g-02`。
-- 当前规格：`N6lS.Iu.I10.2`，2×H100 80GB、44 vCPU、460GiB。
+- 当前 CCI 应用：`Noise-Budget-MIG-A` / `noise-budget-mig-a`，UID `f346c9dc3cc44b80a1bfd86d02b551d7`。
+- 备用同配置应用：`Noise-Budget-MIG-B` / `noise-budget-mig-b`，UID `cf69b9238b014d70bcc1a59cc54a33d2`。
+- 集群：`debug_mig_cluster` / `debug-mig-cluster`。不要把 ACP 专用的 computing cluster 当作交互式 debug 环境。
+- 当前规格：`n6lv.n.i40.1.8c128g`，每实例 1×H100 MIG `3g.40gb`、8 vCPU、128GiB。
 - 镜像：`lepton-trainingjob/nvidia24.04-ubuntu22.04-py3.10-cuda12.4-cudnn9.1-torch2.3.0-transformerengine1.5`，tag `v1.0.0-20241130-nvdia-base-image`。
-- 当前 2 卡实验使用 8 个逻辑 rank，仅验证损失、数据记账和代码正确性。共享卡上的墙钟时间不是比赛结果。
+- 当前功能实验在一张 MIG 上以单进程串行计算 8 个 head，仅验证损失、数据记账和代码正确性，不使用不受 NCCL 支持的单卡多 rank 方式。墙钟时间不是比赛结果。
 - 不停止、删除或修改其他应用，不恢复旧实验队列。看到其他 GPU/CPU 进程时先辨认，不要按“占用资源”直接清理。
 
 ## 2. 仓库布局
@@ -24,7 +24,7 @@
 - `tools/zhicheng/noise_sshd.sh`：安装并启动 sshd，配置授权公钥；不包含私钥。
 - `tools/zhicheng/remote_setup.sh`：克隆公开代码、安装依赖并生成/验证固定数据。
 - `tools/zhicheng/remote_pipeline.sh`：等待数据验证后启动功能实验。
-- `tools/zhicheng/remote_identity_probe.sh`：在当前 2 张物理卡上运行 8 个逻辑 rank，并明确标记非纪录。
+- `tools/zhicheng/remote_identity_probe_mig.sh`：在当前单张 MIG 上串行计算 8 个 head，并明确标记非纪录。
 - `tools/zhicheng/use_mirror.py`：仅替换下载源，保留依赖版本与哈希及原始配置备份。
 - `tools/zhicheng/noise_cci_pipeline_init.sh`：实例自举入口，先启动 sshd，再执行安装和实验。
 - `.tools/`：本地临时脚本、浏览器依赖和截图，已忽略，不得推送。
@@ -57,10 +57,10 @@ export PLAYWRIGHT_CORE_PATH="D:/GitHub/noise-budget/.tools/browser/node_modules/
 
 当前 EIP 池：`202610201_202610300_01g_用于dnat创建`，EIP 为 `118.145.32.163`，资源名 `eip-zhicheng-cd005511`。
 
-两条规则都应为 TCP、目的端口 22，并指向上述 Noise-Budget UID：
+两条规则都应为 TCP、目的端口 22，并分别指向上述 MIG 应用：
 
-- `118.145.32.163:10182 -> Noise-Budget:22`
-- `118.145.32.163:11182 -> Noise-Budget:22`
+- `118.145.32.163:10182 -> Noise-Budget-MIG-B:22`
+- `118.145.32.163:11182 -> Noise-Budget-MIG-A:22`
 
 **DNAT 和 sshd 是两件事。** DNAT 为 `ACTIVE` 只证明网络转发存在；`Connection refused` 通常表示目标没有 sshd，`timed out` 才优先检查规则、目标或实例状态。
 
@@ -92,6 +92,8 @@ export WANT=10182,11182
 
 ```bash
 export EXT_PORT=10182
+export INT_FILTER=noise-budget-mig-b
+export INT_NAME='Noise-Budget-MIG-B(noise-budget-mig-b)'
 "$NODE" tools/zhicheng/dnat_add.js dry
 "$NODE" tools/zhicheng/dnat_add.js save
 ```
@@ -111,7 +113,7 @@ for port in 10182 11182; do
 done
 ```
 
-预期主机名以 `app-d23f37025c03458c96c481c6f268b71d-` 开头。若不是，立即停止后续操作并重新检查 DNAT 目标，不能把代码或数据发往其他容器。
+预期 11182 的主机名以 `app-f346c9dc3cc44b80a1bfd86d02b551d7-` 开头，10182 以 `app-cf69b9238b014d70bcc1a59cc54a33d2-` 开头。若不匹配，立即停止后续操作并重新检查 DNAT 目标，不能把代码或数据发往其他容器。
 
 容器重建会更换主机密钥。本操作示例使用独立 `UserKnownHostsFile=/dev/null`，避免污染默认 known_hosts。若使用默认 known_hosts，先备份，再只删除该 EIP:port 的旧条目。
 
@@ -146,14 +148,14 @@ GitHub Release `public-data-v1` 只是公开输入数据的传输备份，不是
 
 ## 7. 实验与结果
 
-当前 2×H100 功能实验使用 8 个逻辑 rank，并保存 `physical_gpus=2`、`record_eligible=false` 元数据。只有数据验证通过才启动训练。在 `/root/work` 布局的 CCI 实例中执行：
+当前功能实验使用单张 MIG、单进程和串行 head 计算，并保存 `physical_gpus=1`、`logical_ranks=1`、`serial_heads=8`、`record_eligible=false` 元数据。只有数据验证通过才启动训练。在 `/root/work` 布局的 CCI 实例中执行：
 
 ```bash
 bash tools/zhicheng/remote_setup.sh
 bash tools/zhicheng/remote_pipeline.sh
 ```
 
-`remote_pipeline.sh` 调用 `remote_identity_probe.sh`，把 8 个 rank 分配到 2 张物理卡。不要直接在 2 卡机器上用 `torchrun --nproc_per_node=8` 代替该包装器。
+`remote_pipeline.sh` 调用 `remote_identity_probe_mig.sh`。单卡路径预热后直接执行，避免为每种变体保留一份 CUDA graph；其数学估计与 8 卡路径相同，但不保留多个 rank 共享 MIG 的非法拓扑。
 
 在真实的 8 卡正式环境中，诊断命令为：
 

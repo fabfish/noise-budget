@@ -28,10 +28,25 @@ official evaluator verifies the final weights; no unmeasured speedup is claimed.
 The first experiment measures the low-cost identity phase over the full 30M-token epoch, without a Cut phase.
 This is a diagnostic, not a record claim; the default training command and baseline recipe are unchanged.
 
+On a real 8-GPU node:
+
 ```bash
 uv run torchrun --standalone --nproc_per_node=8 train/speedrun/run.py \
   --identity-only --identity-updates 1831 --output logs/identity-probe
 ```
+
+For a single debug MIG, the helper below evaluates all eight heads serially without retaining eight CUDA
+graphs. It does not produce a record-eligible timing:
+
+```bash
+NOISE_OUTPUT=logs/identity-probe-mig-serial bash tools/zhicheng/remote_identity_probe_mig.sh
+```
+
+**Diagnostic result (not a record):** on one H100 MIG `3g.40gb`, the full identity phase used seed 0,
+all 14,648 rows (29,999,104 prediction tokens), and reached final validation loss **3.7642502785** in
+147.79 seconds. The unmodified official evaluator independently returned the same loss. This rules out
+identity-only training for the 3.5 target; the next candidate must retain a hybrid phase. The serial-MIG
+wall time is not comparable with the official 8xH100 leaderboard.
 
 ## Tracks
 

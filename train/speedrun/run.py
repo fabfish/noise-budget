@@ -3612,9 +3612,10 @@ def identity_grad(model, idx, targets, lo, hi, rows_total, skip=()):
                           [mine(cache[f'h{i}.in.attn.c_proj']) for i in run], [targets_o[i] for i in run],
                           [cache[f'h{i}.lse'].transpose(1, 2).reshape(-1, H)[lo:hi].contiguous().view(BF16)
                            for i in run])  # [b, h, t] -> by token, every row of this GPU's
-        got = torch.empty_like(send)
-        # [source GPU (its tokens), k, m, PACK]: this GPU's head over the batch
-        heads_in = dist.all_to_all_single(got, send, async_op=True)
+        if world > 1:
+            got = torch.empty_like(send)
+            # [source GPU (its tokens), k, m, PACK]: this GPU's head over the batch
+            heads_in = dist.all_to_all_single(got, send, async_op=True)
     # while the heads' inputs travel: the weight-gradient products on bf16 operands (fp32 sums)
     hidden = hidden_credits([cache[f'h{i}.mlp.c_fc'] for i in range(L)], credb, model.wide_bf[L:], lo, hi)
     torch.bmm(credb.transpose(1, 2), acts, out=gwide[L:])  # mlp.c_proj, oriented (out, in)
@@ -3623,7 +3624,13 @@ def identity_grad(model, idx, targets, lo, hi, rows_total, skip=()):
     # the MLP matrices' gradients are complete: reduce them while the head credits run
     works = dict(wide=dist.reduce_scatter_tensor(model.owned['wide'], model.grad['wide'], async_op=True))
     if not k:
-        got2 = torch.zeros(world, 0, 3, m, HD, device=idx.device, dtype=BF16)
+        got2 = torch.zeros(H, 0, 3, m, HD, device=idx.device, dtype=BF16)
+    elif world == 1:  # serial diagnostic: each head in turn, then restore the usual eight-head layout
+        got2 = torch.empty(H, k, 3, m, HD, device=idx.device, dtype=BF16)
+        for head in range(H):
+            back = torch.empty(1, k, 3, m, HD, device=idx.device, dtype=BF16)
+            id_head_scores(send[head:head + 1], rope32, model.windows[tuple(run)], back, rows_total, t)
+            got2[head].copy_(back[0])
     else:  # one head per GPU
         heads_in.wait()
         back = torch.empty(world, k, 3, m, HD, device=idx.device, dtype=BF16)  # [GPU that holds the tokens, ...]
@@ -3636,7 +3643,7 @@ def identity_grad(model, idx, targets, lo, hi, rows_total, skip=()):
     model.grad['wte'].zero_().index_add_(0, tokens, credit_x0)
     model.grad['lam_r'].copy_(scal_r)
     model.grad['lam_0'].copy_(scal_0)
-    if k:
+    if k and world > 1:
         heads_out.wait()
     # the skipped blocks' queries, keys and values get no credit
     by_token, vcredits = credit_stacks(got2, tuple(run), VE_BLOCKS)
@@ -3782,8 +3789,8 @@ class IdentityPhase:
         global STEPS, WARMUP_UNTIL, COOLDOWN, ID_SEED, START, EMA, SKIP, MODEL
         STEPS, WARMUP_UNTIL, COOLDOWN, ID_SEED = updates, updates * 4 // 5, updates * 2 // 5, seed
         START, EMA, SKIP = start, ema, skip
-        if world != H:
-            raise SystemExit(f'one head per GPU: run on {H} GPUs, not {world}')
+        if world not in (1, H):
+            raise SystemExit(f'one head per GPU or serial heads on one GPU: run on 1 or {H} GPUs, not {world}')
         torch.backends.cuda.matmul.allow_tf32 = True
         self.rank, self.updates = rank, updates
         self.order = np.random.default_rng((ID_SEED + 1, 0)).permutation(len(rows))
@@ -3794,20 +3801,27 @@ class IdentityPhase:
         graphs = self.graphs = {}
         steps_of = (train_step, average_step) if EMA else (train_step,)  # the tail average's updates: own graphs
         skips = ((), SKIP_BLOCKS) if SKIP else ((),)  # and the late skip's
-        for length in (WARMUP_LEN, SEQ):  # warmup on random tokens (model.rows is random until training), capture
-            for update in steps_of:
-                for skip_blocks in skips:
-                    side = torch.cuda.Stream()
-                    side.wait_stream(torch.cuda.current_stream())
-                    with torch.cuda.stream(side):
+        if world == 1:  # serial diagnostics keep one variant's activations at a time, not eight CUDA graphs
+            for length in (WARMUP_LEN, SEQ):
+                for update in steps_of:
+                    for skip_blocks in skips:
                         for _ in range(3):
                             update(model, length, skip_blocks)
-                    torch.cuda.current_stream().wait_stream(side)
-                    torch.cuda.synchronize()
-                    g = torch.cuda.CUDAGraph()
-                    with torch.cuda.graph(g):
-                        update(model, length, skip_blocks)
-                    graphs[length, update is average_step, bool(skip_blocks)] = g
+        else:
+            for length in (WARMUP_LEN, SEQ):  # warmup on random tokens (model.rows is random until training), capture
+                for update in steps_of:
+                    for skip_blocks in skips:
+                        side = torch.cuda.Stream()
+                        side.wait_stream(torch.cuda.current_stream())
+                        with torch.cuda.stream(side):
+                            for _ in range(3):
+                                update(model, length, skip_blocks)
+                        torch.cuda.current_stream().wait_stream(side)
+                        torch.cuda.synchronize()
+                        g = torch.cuda.CUDAGraph()
+                        with torch.cuda.graph(g):
+                            update(model, length, skip_blocks)
+                        graphs[length, update is average_step, bool(skip_blocks)] = g
         with torch.no_grad():  # training starts from the untouched state, on the real batches
             for x, s in zip(model.tensors(), snapshot):
                 x.copy_(s)
@@ -3836,7 +3850,11 @@ class IdentityPhase:
         first = round(EMA_FROM * STEPS)  # the update at which the tail average starts
         for step in range(total):
             length = WARMUP_LEN if step < WARMUP_UNTIL else SEQ
-            graphs[length, EMA and step > first, SKIP and step >= round(SKIP_FROM * STEPS)].replay()
+            if model.world == 1:
+                update = average_step if EMA and step > first else train_step
+                update(model, length, SKIP_BLOCKS if SKIP and step >= round(SKIP_FROM * STEPS) else ())
+            else:
+                graphs[length, EMA and step > first, SKIP and step >= round(SKIP_FROM * STEPS)].replay()
             if EMA and step == first:  # the average starts at the weights after this update
                 torch._foreach_copy_(model.ema, [w.float() for w in model.averaged()])
         if EMA and total > first:  # the final weights: w + EMA_MIX (EMA - w), inside the timer
@@ -4113,7 +4131,7 @@ def main():
     device = torch.device('cuda', torch.cuda.current_device())
     torch.set_num_threads(1)
     torch.set_float32_matmul_precision('high')
-    if world > 1:
+    if world > 1 or args.identity_updates:
         torch.distributed.init_process_group('nccl', device_id=device)
     try:
         train_stages(args, settings, device, rank, world)

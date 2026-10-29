@@ -12,8 +12,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const EIP = 'eip-zhicheng-cd005511';
 const EXT_PORT = process.env.EXT_PORT || '11182';
 const INT_TYPE_TEXT = process.env.INT_TYPE_TEXT || '云容器实例应用';
-const INT_FILTER = process.env.INT_FILTER || 'noise-budget';
-const INT_NAME = process.env.INT_NAME || 'Noise-Budget(noise-budget)';
+const INT_FILTER = process.env.INT_FILTER || 'noise-budget-mig-a';
+const INT_NAME = process.env.INT_NAME || 'Noise-Budget-MIG-A(noise-budget-mig-a)';
 const INT_PORT = process.env.INT_PORT || '22';
 const MODE = (process.argv[2] || 'dry').toLowerCase();
 

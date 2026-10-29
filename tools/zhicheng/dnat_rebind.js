@@ -35,8 +35,8 @@ const argOf = (k) => {
 };
 const EIP = argOf('eip') || 'eip-zhicheng-cd005511';
 const EXT = argOf('ext') || '11182';
-const TARGET = argOf('target') || 'Noise-Budget';
-const TARGET_UID = argOf('uid') || 'd23f37025c03458c96c481c6f268b71d';
+const TARGET = argOf('target') || 'Noise-Budget-MIG-A';
+const TARGET_UID = argOf('uid') || 'f346c9dc3cc44b80a1bfd86d02b551d7';
 const INT_PORT = argOf('port') || '22';
 const STEP = argOf('step') || 'report';
 const DRY = args.includes('--dry');

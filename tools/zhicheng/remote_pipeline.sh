@@ -15,4 +15,4 @@ if [ "$ready" != 1 ]; then
   exit 1
 fi
 echo DATA_VERIFIED_STARTING_PROBE
-bash "$TOOLS/remote_identity_probe.sh"
+bash "$TOOLS/remote_identity_probe_mig.sh"
